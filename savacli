@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 #
 # savacli is a command-line client for Avira's anti-virus engine SAVAPI.
 #
@@ -18,11 +18,6 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 #
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-
 import os
 import sys
 import socket
@@ -36,12 +31,10 @@ import configparser
 from email.utils import formatdate
 from io import BytesIO
 from copy import copy
-# noinspection PyCompatibility
-from builtins import bytes, dict, int, list, object, str
 
 
 NAME = "savacli"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 
 try:
     # noinspection PyUnresolvedReferences
@@ -160,8 +153,8 @@ class Protocol(object):
     # NOTE: Currently unused method
     @timeout
     def change_detect_type(self, cap, cap_flag):
-        cap_flag = str(cap_flag)
-        response = self._send(b"SET DETECT_" + cap.upper() + " " + cap_flag)
+        cap_flag = bytes(cap_flag)
+        response = self._send(b"SET DETECT_" + cap.upper() + b" " + cap_flag)
         if response:
             result = response.split(":")
             # Changing a type was successfull
@@ -191,6 +184,8 @@ class Protocol(object):
         if config.logclasses:
             logger = logging.getLogger("default")
             log = True
+        else:
+            logger = None
 
         # We need to fetch all data. Archives could produce large output
         tmpdata = list()
@@ -235,7 +230,7 @@ class Protocol(object):
                     # Alert found
                     elif number == 310:
                         self.__scanner.count_infected()
-                        alert_name, status, description = message.split(";")
+                        alert_name, status, description = message.split(b";")
                         self.__alerts.append(
                             dict(path=path,
                                  alert_name=alert_name.strip(),
@@ -243,8 +238,8 @@ class Protocol(object):
                                  description=description.strip()))
                         if log:
                             if "infected" in config.logclasses:
-                                logger.warn("file=%s type=%s "
-                                            "alert=[%s] desc=[%s]" % (
+                                logger.warning("file=%s type=%s "
+                                               "alert=[%s] desc=[%s]" % (
                                                 path,
                                                 status.strip(),
                                                 alert_name.strip(),
@@ -273,7 +268,7 @@ class Protocol(object):
                     elif number == 420:
                         self.__scanner.count_infected()
                         self.__scanner.count_repairable()
-                        alert_name, status, description = message.split(";")
+                        alert_name, status, description = message.split(b";")
                         self.__alerts.append(
                             dict(path=path,
                                  alert_name=alert_name.strip(),
@@ -281,8 +276,8 @@ class Protocol(object):
                                  description=description.strip()))
                         if log:
                             if "infected" in config.logclasses:
-                                logger.warn("file=%s type=%s "
-                                            "alert=[%s] desc=[%s]" % (
+                                logger.warning("file=%s type=%s "
+                                               "alert=[%s] desc=[%s]" % (
                                                 path,
                                                 status.strip(),
                                                 alert_name.strip(),
@@ -584,7 +579,7 @@ class Config(configparser.RawConfigParser):
                             sockettimeout = None
                             print("{} is not a valid number for {}. "
                                   "Setting default to 300.0".format(
-                                result, option), file=sys.stderr)
+                                    result, option), file=sys.stderr)
                         if sockettimeout and sockettimeout > 0.0:
                             self.sockettimeout = sockettimeout
                         else:
@@ -688,7 +683,6 @@ def main():
                         help="to enable logging, specify a log file")
     parser.add_argument("--input",
                         "-i",
-                        required=True,
                         type=str,
                         nargs="+",
                         help="give a file or a directory to scan")
@@ -736,8 +730,21 @@ def main():
                         "-v",
                         action='version',
                         version='%(prog)s ' + VERSION)
+    parser.add_argument('--version-from-savapi',
+                        '-V',
+                        action="store_true",
+                        default=False,
+                        help="Get version from SAVAPI daemon")
 
     args = parser.parse_args()
+
+    if not args.input and not args.version_from_savapi:
+        print("Either set --input or --version-from-savapi", file=sys.stderr)
+        sys.exit(1)
+
+    if args.input and args.version_from_savapi:
+        print("Either set --input or --version-from-savapi", file=sys.stderr)
+        sys.exit(1)
 
     if os.path.exists(args.config):
         global config
@@ -775,64 +782,73 @@ def main():
     if config.reportheader:
         out["reportheader"] = scanner.report_header()
 
-    out["results"] = list()
-
-    if config.logclasses:
-        # noinspection PyUnboundLocalVariable
-        logger.info("-" * 15 + " START " + "-" * 15)
-
-    # 1. File is not on the local disk
-    if not config.local:
-        for infile in iter(args.input):
-            scanner.scan(infile)
-            result = scanner.scan_result()
-            if result:
-                out["results"].extend(result)
-    # 2. Scanner and files are on the same machine
+    if args.version_from_savapi:
+        out["reportheader"] = scanner.report_header()
     else:
-        for infile in iter(args.input):
-            if os.path.isfile(infile):
-                if infile not in config.excludefiles:
+        out["results"] = list()
+
+        if config.logclasses:
+            # noinspection PyUnboundLocalVariable
+            logger.info("-" * 15 + " START " + "-" * 15)
+
+        # 1. File is not on the local disk
+        if not config.local:
+            for infile in iter(args.input):
+                scanner.scan(infile)
+                result = scanner.scan_result()
+                if result:
+                    out["results"].extend(result)
+        # 2. Scanner and files are on the same machine
+        else:
+            for infile in iter(args.input):
+                if os.path.isfile(infile):
+                    if infile not in config.excludefiles:
+                        scanner.scan(infile)
+                        result = scanner.scan_result()
+                        if result:
+                            out["results"].extend(result)
+                elif os.path.isdir(infile):
+                    if args.recursive:
+                        recursive_dir = ScanRecursiveList(infile)
+                        for entry in iter(recursive_dir):
+                            entry_split = entry.split("/")[:-1]
+                            length_dir = len(entry_split)
+                            skip = False
+                            for excludedir in iter(config.excludedirectories):
+                                excludedir_split = excludedir.split("/")
+                                length_excludedir = len(excludedir_split)
+                                if length_excludedir <= length_dir:
+                                    if entry_split[
+                                            :length_excludedir] == \
+                                            excludedir_split:
+                                        skip = True
+                                        break
+                            if skip:
+                                continue
+                            if entry in config.excludefiles:
+                                continue
+                            scanner.scan(entry)
+                            result = scanner.scan_result()
+                            if result:
+                                out["results"].extend(result)
+                    else:
+                        if infile not in config.excludedirectories:
+                            entries = os.listdir(infile)
+                            for entry in iter(entries):
+                                path = infile + "/" + entry
+                                if os.path.isfile(path):
+                                    scanner.scan(path)
+                                    result = scanner.scan_result()
+                                    if result:
+                                        out["results"].extend(result)
+                elif infile.startswith("apchash://"):
                     scanner.scan(infile)
                     result = scanner.scan_result()
                     if result:
                         out["results"].extend(result)
-            elif os.path.isdir(infile):
-                if args.recursive:
-                    recursive_dir = ScanRecursiveList(infile)
-                    for entry in iter(recursive_dir):
-                        entry_split = entry.split("/")[:-1]
-                        length_dir = len(entry_split)
-                        skip = False
-                        for excludedir in iter(config.excludedirectories):
-                            excludedir_split = excludedir.split("/")
-                            length_excludedir = len(excludedir_split)
-                            if length_excludedir <= length_dir:
-                                if entry_split[
-                                        :length_excludedir] == excludedir_split:
-                                    skip = True
-                                    break
-                        if skip:
-                            continue
-                        if entry in config.excludefiles:
-                            continue
-                        scanner.scan(entry)
-                        result = scanner.scan_result()
-                        if result:
-                            out["results"].extend(result)
-                else:
-                    if infile not in config.excludedirectories:
-                        entries = os.listdir(infile)
-                        for entry in iter(entries):
-                            path = infile + "/" + entry
-                            if os.path.isfile(path):
-                                scanner.scan(path)
-                                result = scanner.scan_result()
-                                if result:
-                                    out["results"].extend(result)
 
-    if config.reportsummary:
-        out["reportsummary"] = scanner.report_summary()
+        if config.reportsummary:
+            out["reportsummary"] = scanner.report_summary()
 
     scanner.close()
 
@@ -842,7 +858,7 @@ def main():
     # Display data structure
 
     if config.reportformat == "plain":
-        if config.reportheader:
+        if config.reportheader or args.version_from_savapi:
             print("Global information:")
             print("-------------------")
 
@@ -865,6 +881,9 @@ def main():
                 print("license expire: %s" %
                       out["reportheader"]["expire"].decode("utf-8"))
 
+            if args.version_from_savapi:
+                return scanner.exit()
+
         if len(out["results"]) > 0:
             if config.reportheader or config.reportsummary:
                 if config.reportheader:
@@ -872,6 +891,7 @@ def main():
                 print("Scan results:")
                 print("-------------")
             for alert in iter(out["results"]):
+                # noinspection PyArgumentList
                 print("alert_name={alert_name} "
                       "type={status} "
                       "description={description} "
