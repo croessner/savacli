@@ -22,6 +22,7 @@ import os
 import sys
 import socket
 import argparse
+import hashlib
 import json
 import logging
 import logging.handlers
@@ -386,8 +387,18 @@ class Scanner(object):
         self.__clean = 0
         self.__not_scanned = 0
 
-    def scan(self, path):
+    def scan(self, path, use_apc=False):
         self.__proto.scan(path)
+        if use_apc:
+            data = None
+            try:
+                data = open(path, "rb").read()
+            except Exception as e_readfile:
+                print("Can not read file {0}: {1}".format(path, e_readfile),
+                      file=sys.stderr)
+            if data:
+                sha_hash = hashlib.sha256(data).hexdigest()
+                self.__proto.scan("apchash://{0}".format(sha_hash))
 
     def scan_result(self):
         return self.__proto.result()
@@ -462,6 +473,7 @@ class Config(configparser.RawConfigParser):
         self.local = False
         self.reportheader = False
         self.reportsummary = False
+        self.use_apc = False
 
         err = False
 
@@ -589,7 +601,7 @@ class Config(configparser.RawConfigParser):
                 except configparser.NoOptionError:
                     pass
 
-            bool_opts = ["Local", "ReportHeader", "ReportSummary"]
+            bool_opts = ["Local", "ReportHeader", "ReportSummary", "UseAPC"]
 
             if args.local:
                 self.local = args.local
@@ -600,6 +612,9 @@ class Config(configparser.RawConfigParser):
             if args.reportsummary:
                 self.reportsummary = args.reportsummary
                 bool_opts.remove("ReportSummary")
+            if args.use_apc:
+                self.use_apc = args.use_apc
+                bool_opts.remove("UseAPC")
 
             # Optional boolean options
             for option in bool_opts:
@@ -618,6 +633,8 @@ class Config(configparser.RawConfigParser):
                             self.reportheader = result
                         elif option == "ReportSummary":
                             self.reportsummary = result
+                        elif option == "UseAPC":
+                            self.use_apc = result
                 except configparser.NoOptionError:
                     pass
 
@@ -726,12 +743,17 @@ def main():
                         type=str,
                         nargs="*",
                         help="exclude directories from being scanned")
-    parser.add_argument('--version',
+    parser.add_argument("--use-apc",
+                        "-u",
+                        action="store_true",
+                        default=None,
+                        help="Activate APC support")
+    parser.add_argument("--version",
                         "-v",
                         action='version',
                         version='%(prog)s ' + VERSION)
-    parser.add_argument('--version-from-savapi',
-                        '-V',
+    parser.add_argument("--version-from-savapi",
+                        "-V",
                         action="store_true",
                         default=False,
                         help="Get version from SAVAPI daemon")
@@ -803,7 +825,7 @@ def main():
             for infile in iter(args.input):
                 if os.path.isfile(infile):
                     if infile not in config.excludefiles:
-                        scanner.scan(infile)
+                        scanner.scan(infile, use_apc=config.use_apc)
                         result = scanner.scan_result()
                         if result:
                             out["results"].extend(result)
@@ -827,7 +849,7 @@ def main():
                                 continue
                             if entry in config.excludefiles:
                                 continue
-                            scanner.scan(entry)
+                            scanner.scan(entry, use_apc=config.use_apc)
                             result = scanner.scan_result()
                             if result:
                                 out["results"].extend(result)
