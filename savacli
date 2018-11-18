@@ -35,7 +35,7 @@ from copy import copy
 
 
 NAME = "savacli"
-VERSION = "0.5.0"
+VERSION = "0.5.2"
 
 try:
     # noinspection PyUnresolvedReferences
@@ -164,10 +164,12 @@ class Protocol(object):
     @timeout
     def scan(self, path):
         self.__scanner.count_total()
-        # noinspection PyArgumentList
-        self.__client.sendall(b"SCAN " +
-                              bytes(path, encoding="utf-8") +
-                              b'\n')
+        try:
+            self.__client.sendall(b"SCAN " + path + b'\n')
+        except UnicodeEncodeError as encode_err:
+            print("Unicode encode error for '{0}': {1}".format(
+                path, encode_err), file=sys.stderr)
+            return
 
         # A terminal status code was found
         terminate = False
@@ -671,7 +673,9 @@ class ScanRecursiveList(object):
     def __iter__(self):
         for root, directories, files in os.walk(self.__path):
             for filename in files:
-                filepath = os.path.join(root, filename)
+                filepath = os.path.join(root.encode("utf-8", errors="replace"),
+                                        filename.encode("utf-8",
+                                                        errors="replace"))
                 yield filepath
 
 
@@ -816,7 +820,8 @@ def main():
             for infile in iter(args.input):
                 if os.path.isfile(infile):
                     if infile not in config.excludefiles:
-                        scanner.scan(infile, use_apc=config.use_apc)
+                        scanner.scan(infile.encode("utf-8", errors="replace"),
+                                     use_apc=config.use_apc)
                         result = scanner.scan_result()
                         if result:
                             out["results"].extend(result)
@@ -824,7 +829,7 @@ def main():
                     if args.recursive:
                         recursive_dir = ScanRecursiveList(infile)
                         for entry in iter(recursive_dir):
-                            entry_split = entry.split("/")[:-1]
+                            entry_split = entry.split(b"/")[:-1]
                             length_dir = len(entry_split)
                             skip = False
                             for excludedir in iter(config.excludedirectories):
@@ -850,7 +855,8 @@ def main():
                             for entry in iter(entries):
                                 path = infile + "/" + entry
                                 if os.path.isfile(path):
-                                    scanner.scan(path)
+                                    scanner.scan(path.encode("utf-8",
+                                                             errors="replace"))
                                     result = scanner.scan_result()
                                     if result:
                                         out["results"].extend(result)
