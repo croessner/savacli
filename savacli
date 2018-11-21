@@ -2,7 +2,7 @@
 #
 # savacli is a command-line client for Avira's anti-virus engine SAVAPI.
 #
-# Copyright (C) 2016 sys4 AG <https://sys4.de>
+# Copyright (C) 2018 R.N.S. <c@roessner.co>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -31,11 +31,10 @@ import configparser
 
 from email.utils import formatdate
 from io import BytesIO
-from copy import copy
 
 
 NAME = "savacli"
-VERSION = "0.5.2"
+VERSION = "0.5.4"
 
 try:
     # noinspection PyUnresolvedReferences
@@ -164,10 +163,20 @@ class Protocol(object):
     @timeout
     def scan(self, path):
         self.__scanner.count_total()
+
+        # For some reason, 'path' might not be of instance bytes!
+        if not isinstance(path, bytes):
+            try:
+                path = bytes(path, encoding="utf-8")
+            except UnicodeEncodeError as encode_err:
+                print("Unicode encode error for '{0}' (ERR#1): {1}".format(
+                    path, encode_err), file=sys.stderr)
+                return
+
         try:
             self.__client.sendall(b"SCAN " + path + b'\n')
         except UnicodeEncodeError as encode_err:
-            print("Unicode encode error for '{0}': {1}".format(
+            print("Unicode encode error for '{0}' (ERR#2): {1}".format(
                 path, encode_err), file=sys.stderr)
             return
 
@@ -463,7 +472,6 @@ class Config(configparser.RawConfigParser):
         self.excludefiles = None
         self.excludedirectories = None
         #
-        self.local = False
         self.reportheader = False
         self.reportsummary = False
         self.use_apc = False
@@ -594,11 +602,8 @@ class Config(configparser.RawConfigParser):
                 except configparser.NoOptionError:
                     pass
 
-            bool_opts = ["Local", "ReportHeader", "ReportSummary", "UseAPC"]
+            bool_opts = ["ReportHeader", "ReportSummary", "UseAPC"]
 
-            if args.local:
-                self.local = args.local
-                bool_opts.remove("Local")
             if args.reportheader:
                 self.reportheader = args.reportheader
                 bool_opts.remove("ReportHeader")
@@ -620,9 +625,7 @@ class Config(configparser.RawConfigParser):
                     else:
                         result = None
                     if result:
-                        if option == "Local":
-                            self.local = result
-                        elif option == "ReportHeader":
+                        if option == "ReportHeader":
                             self.reportheader = result
                         elif option == "ReportSummary":
                             self.reportsummary = result
@@ -639,31 +642,8 @@ class Config(configparser.RawConfigParser):
                   "nor config option Socket given")
             sys.exit(1)
 
-        if self.local:
-            if self.excludefiles:
-                ef = copy(self.excludefiles)
-                for f in iter(ef):
-                    if not os.path.exists(f):
-                        self.excludefiles.remove(f)
-                    else:
-                        if not os.path.isfile(f):
-                            self.excludefiles.remove(f)
-            else:
-                self.excludefiles = list()
-
-            if self.excludedirectories:
-                ed = copy(self.excludedirectories)
-                for d in iter(ed):
-                    if not os.path.exists(d):
-                        self.excludedirectories.remove(d)
-                    else:
-                        if not os.path.isdir(d):
-                            self.excludedirectories.remove(d)
-            else:
-                self.excludedirectories = list()
-        else:
-            self.excludefiles = list()
-            self.excludedirectories = list()
+        self.excludefiles = list()
+        self.excludedirectories = list()
 
 
 class ScanRecursiveList(object):
@@ -698,12 +678,6 @@ def main():
                         type=str,
                         nargs="+",
                         help="give a file or a directory to scan")
-    parser.add_argument("--local",
-                        "-l",
-                        default=None,
-                        action="store_true",
-                        help="scanner and scanned files run on the same "
-                             "machine")
     parser.add_argument("--recursive",
                         "-r",
                         default=False,
@@ -808,63 +782,55 @@ def main():
             # noinspection PyUnboundLocalVariable
             logger.info("-" * 15 + " START " + "-" * 15)
 
-        # 1. File is not on the local disk
-        if not config.local:
-            for infile in iter(args.input):
+        # Scanner and files are on the same machine
+        for infile in iter(args.input):
+            if os.path.isfile(infile):
+                if infile not in config.excludefiles:
+                    scanner.scan(infile.encode("utf-8", errors="replace"),
+                                 use_apc=config.use_apc)
+                    result = scanner.scan_result()
+                    if result:
+                        out["results"].extend(result)
+            elif os.path.isdir(infile):
+                if args.recursive:
+                    recursive_dir = ScanRecursiveList(infile)
+                    for entry in iter(recursive_dir):
+                        entry_split = entry.split(b"/")[:-1]
+                        length_dir = len(entry_split)
+                        skip = False
+                        for excludedir in iter(config.excludedirectories):
+                            excludedir_split = excludedir.split("/")
+                            length_excludedir = len(excludedir_split)
+                            if length_excludedir <= length_dir:
+                                if entry_split[
+                                        :length_excludedir] == \
+                                        excludedir_split:
+                                    skip = True
+                                    break
+                        if skip:
+                            continue
+                        if entry in config.excludefiles:
+                            continue
+                        scanner.scan(entry, use_apc=config.use_apc)
+                        result = scanner.scan_result()
+                        if result:
+                            out["results"].extend(result)
+                else:
+                    if infile not in config.excludedirectories:
+                        entries = os.listdir(infile)
+                        for entry in iter(entries):
+                            path = infile + "/" + entry
+                            if os.path.isfile(path):
+                                scanner.scan(path.encode("utf-8",
+                                                         errors="replace"))
+                                result = scanner.scan_result()
+                                if result:
+                                    out["results"].extend(result)
+            elif infile.startswith("apchash://"):
                 scanner.scan(infile)
                 result = scanner.scan_result()
                 if result:
                     out["results"].extend(result)
-        # 2. Scanner and files are on the same machine
-        else:
-            for infile in iter(args.input):
-                if os.path.isfile(infile):
-                    if infile not in config.excludefiles:
-                        scanner.scan(infile.encode("utf-8", errors="replace"),
-                                     use_apc=config.use_apc)
-                        result = scanner.scan_result()
-                        if result:
-                            out["results"].extend(result)
-                elif os.path.isdir(infile):
-                    if args.recursive:
-                        recursive_dir = ScanRecursiveList(infile)
-                        for entry in iter(recursive_dir):
-                            entry_split = entry.split(b"/")[:-1]
-                            length_dir = len(entry_split)
-                            skip = False
-                            for excludedir in iter(config.excludedirectories):
-                                excludedir_split = excludedir.split("/")
-                                length_excludedir = len(excludedir_split)
-                                if length_excludedir <= length_dir:
-                                    if entry_split[
-                                            :length_excludedir] == \
-                                            excludedir_split:
-                                        skip = True
-                                        break
-                            if skip:
-                                continue
-                            if entry in config.excludefiles:
-                                continue
-                            scanner.scan(entry, use_apc=config.use_apc)
-                            result = scanner.scan_result()
-                            if result:
-                                out["results"].extend(result)
-                    else:
-                        if infile not in config.excludedirectories:
-                            entries = os.listdir(infile)
-                            for entry in iter(entries):
-                                path = infile + "/" + entry
-                                if os.path.isfile(path):
-                                    scanner.scan(path.encode("utf-8",
-                                                             errors="replace"))
-                                    result = scanner.scan_result()
-                                    if result:
-                                        out["results"].extend(result)
-                elif infile.startswith("apchash://"):
-                    scanner.scan(infile)
-                    result = scanner.scan_result()
-                    if result:
-                        out["results"].extend(result)
 
         if config.reportsummary:
             out["reportsummary"] = scanner.report_summary()
