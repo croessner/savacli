@@ -44,7 +44,7 @@ except ImportError:
     pass
 
 
-__author__ = "Christian Roessner <cr@sys4.de>"
+__author__ = "Christian Roessner <c@roessner.co>"
 __version__ = VERSION
 
 
@@ -751,7 +751,11 @@ def main():
         try:
             logger = logging.getLogger('default')
             logger.setLevel(logging.INFO)
-            log_handler = logging.handlers.WatchedFileHandler(config.logfile)
+            if config.logfile == "STDOUT":
+                log_handler = logging.StreamHandler(sys.stdout)
+            else:
+                log_handler = logging.handlers.WatchedFileHandler(
+                    config.logfile)
             log_handler.setLevel(logging.DEBUG)
             formatter = logging.Formatter(
                 '%(asctime)s %(levelname)s: %(message)s')
