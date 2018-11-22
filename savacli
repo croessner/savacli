@@ -34,7 +34,7 @@ from io import BytesIO
 
 
 NAME = "savacli"
-VERSION = "0.5.4"
+VERSION = "0.5.5"
 
 try:
     # noinspection PyUnresolvedReferences
@@ -751,7 +751,7 @@ def main():
         try:
             logger = logging.getLogger('default')
             logger.setLevel(logging.INFO)
-            if config.logfile == "STDOUT":
+            if config.logfile.lower() == "stdout":
                 log_handler = logging.StreamHandler(sys.stdout)
             else:
                 log_handler = logging.handlers.WatchedFileHandler(
